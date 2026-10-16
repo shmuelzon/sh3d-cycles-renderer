@@ -1,0 +1,16 @@
+--- a/src/integrator/render_scheduler.cpp
++++ b/src/integrator/render_scheduler.cpp
+@@ -789,10 +789,11 @@
+   }
+ 
+   if (background_) {
++    /* sh3d-cycles: more frequent progressive previews in Sweet Home 3D's photo dialog. */
+     if (num_rendered_samples < 32) {
+-      return 1.0;
++      return 0.25;
+     }
+-    return 2.0;
++    return 0.5;
+   }
+ 
+   /* Render time and number of samples rendered are used to figure out the display update interval.

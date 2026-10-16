@@ -1,0 +1,11 @@
+# Outputs
+build/
+CyclesRendererPlugin-*.sh3p
+
+# Build dependencies
+dl/
+
+# General
+*.swp
+*.swo
+tags

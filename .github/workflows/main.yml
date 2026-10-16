@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ master ]
+  release:
+    types: [ created ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-24.04
+          - target: windows-x64
+            os: windows-2022
+          - target: macos-arm64
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # For git describe
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'zulu' # Has Java 8 for Apple Silicon, as SH3D's macOS runtime
+          java-version: 8
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -yq ninja-build
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+      - name: Install build tools (Windows)
+        if: runner.os == 'Windows'
+        run: choco install -y --no-progress make ninja unzip
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Names and cache keys
+        id: names
+        run: |
+          for name in PLUGIN_BASENAME SWEET_HOME_CACHE_KEY BLENDER_CACHE_KEY CYCLES_CACHE_KEY CYCLES_BUILD_CACHE_KEY; do
+            echo "$name=$(make -s print-$name TARGET=${{ matrix.target }})" | tee -a "$GITHUB_OUTPUT"
+          done
+      # Each cache holds an external dependency and is keyed on its version, so it only changes when it's updated
+      - name: Cache Sweet Home 3D
+        uses: actions/cache@v6
+        with:
+          path: |
+            dl/SweetHome3D-*
+            dl/*.jar
+          key: ${{ steps.names.outputs.SWEET_HOME_CACHE_KEY }}
+      - name: Cache Blender's color management configuration
+        uses: actions/cache@v6
+        with:
+          path: dl/blender-*
+          key: ${{ steps.names.outputs.BLENDER_CACHE_KEY }}
+      - name: Cache Cycles' sources and precompiled libraries
+        uses: actions/cache@v6
+        with:
+          path: dl/cycles-*
+          key: ${{ steps.names.outputs.CYCLES_CACHE_KEY }}
+      - name: Cache the Cycles build, without sh3d-cycles
+        uses: actions/cache@v6
+        with:
+          path: |
+            build/native/${{ matrix.target }}/cmake
+            !build/native/${{ matrix.target }}/cmake/sh3d_cycles
+            !build/native/${{ matrix.target }}/cmake/bin/sh3d-cycles*
+          key: ${{ steps.names.outputs.CYCLES_BUILD_CACHE_KEY }}
+      - name: Build
+        run: make TARGET=${{ matrix.target }}
+      - name: Test
+        run: make check TARGET=${{ matrix.target }}
+      - name: Diagnose (Windows)
+        if: failure() && runner.os == 'Windows'
+        run: |
+          ls -la build/native/windows-x64/dist || true
+          dumpbin -nologo -dependents build/native/windows-x64/dist/sh3d-cycles.exe || true
+      - name: Upload Test Renders
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Test Renders (${{ steps.names.outputs.PLUGIN_BASENAME }})
+          path: build/check/*.png
+          if-no-files-found: ignore
+      - name: Upload Plugin
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.names.outputs.PLUGIN_BASENAME }}
+          path: '*.sh3p'
+          compression-level: 0
+      - name: Upload Release
+        if: github.event_name == 'release' && github.event.action == 'created'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${GITHUB_REF#refs/tags/} *.sh3p
+
+  universal:
+    name: Universal plugin
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # For git describe
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'zulu' # Has Java 8 for Apple Silicon, as SH3D's macOS runtime
+          java-version: 8
+      - name: Names
+        id: names
+        run: echo "UNIVERSAL_PLUGIN_BASENAME=$(make -s print-UNIVERSAL_PLUGIN_BASENAME)" | tee -a "$GITHUB_OUTPUT"
+      - name: Download Target Plugins
+        uses: actions/download-artifact@v8
+        with:
+          pattern: CyclesRendererPlugin-*
+          merge-multiple: true
+      - name: Merge
+        run: make universal
+      - name: Upload Plugin
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.names.outputs.UNIVERSAL_PLUGIN_BASENAME }}
+          path: ${{ steps.names.outputs.UNIVERSAL_PLUGIN_BASENAME }}.sh3p
+          compression-level: 0
+      - name: Upload Release
+        if: github.event_name == 'release' && github.event.action == 'created'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${GITHUB_REF#refs/tags/} ${{ steps.names.outputs.UNIVERSAL_PLUGIN_BASENAME }}.sh3p

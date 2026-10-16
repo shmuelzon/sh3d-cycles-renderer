@@ -1,0 +1,11 @@
+--- a/src/app/CMakeLists.txt
++++ b/src/app/CMakeLists.txt
+@@ -172,3 +172,8 @@
+     TARGETS cycles_precompute
+     DESTINATION ${app_install_dir})
+ endif()
++
++# sh3d-cycles, built with the Cycles libraries (https://github.com/shmuelzon/sh3d-cycles-renderer)
++if(DEFINED SH3D_CYCLES_DIR)
++  add_subdirectory(${SH3D_CYCLES_DIR} ${CMAKE_BINARY_DIR}/sh3d_cycles)
++endif()
